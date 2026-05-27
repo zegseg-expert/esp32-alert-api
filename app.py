@@ -6,15 +6,35 @@ from datetime import datetime
 app = FastAPI()
 
 # ========== TELEGRAM SETTINGS ==========
-# These come from Render's environment variables (SECURE)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-def send_telegram_photo(image_bytes, caption="🚨 Alert from your security camera!"):
+def send_telegram_message(message):
+    """Send a text message to Telegram"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return {"success": False, "error": "Missing credentials"}
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
+    
+    try:
+        response = requests.post(url, data=data)
+        result = response.json()
+        return {
+            "success": response.status_code == 200,
+            "status_code": response.status_code,
+            "response": result
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def send_telegram_photo(image_bytes, caption):
     """Send a photo to Telegram"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram not configured")
-        return False
+        return {"success": False, "error": "Missing credentials"}
     
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     files = {"photo": ("alert.jpg", image_bytes, "image/jpeg")}
@@ -22,78 +42,68 @@ def send_telegram_photo(image_bytes, caption="🚨 Alert from your security came
     
     try:
         response = requests.post(url, files=files, data=data)
-        print(f"Telegram photo response: {response.status_code}")
-        return response.status_code == 200
+        return {
+            "success": response.status_code == 200,
+            "status_code": response.status_code
+        }
     except Exception as e:
-        print(f"Error sending photo: {e}")
-        return False
-
-def send_telegram_message(message):
-    """Send a text message to Telegram"""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return False
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    
-    try:
-        response = requests.post(url, data=data)
-        print(f"Telegram message response: {response.status_code}")
-        return response.status_code == 200
-    except Exception as e:
-        print(f"Error sending message: {e}")
-        return False
+        return {"success": False, "error": str(e)}
 
 @app.get("/")
 def home():
     return {
         "message": "ESP32 Alert API is working", 
         "status": "online",
-        "telegram_configured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-    }
-
-@app.post("/detect")
-async def detect(file: UploadFile = File(...)):
-    """
-    ESP32-CAM sends image here when motion/face detected
-    """
-    # Read the image
-    image_bytes = await file.read()
-    
-    # Send to Telegram
-    time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    caption = f"🚨 PERSON DETECTED!\nTime: {time_now}"
-    
-    telegram_sent = send_telegram_photo(image_bytes, caption)
-    
-    return {
-        "status": "success",
-        "message": "Image received",
-        "telegram_sent": telegram_sent,
-        "time": time_now
+        "telegram_configured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        "bot_token_preview": TELEGRAM_BOT_TOKEN[:15] + "..." if TELEGRAM_BOT_TOKEN else None,
+        "chat_id": TELEGRAM_CHAT_ID
     }
 
 @app.get("/test-telegram")
 def test_telegram():
-    """Test endpoint to verify Telegram works"""
+    """Detailed test to debug Telegram issues"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return {
-            "error": "Telegram not configured. Add environment variables in Render dashboard.",
+            "error": "Telegram not configured",
             "bot_token_set": bool(TELEGRAM_BOT_TOKEN),
             "chat_id_set": bool(TELEGRAM_CHAT_ID)
         }
     
-    success = send_telegram_message("✅ Your ESP32 Alert API is working! This is a test message.")
+    # Try to send a test message
+    result = send_telegram_message("✅ Test message from your ESP32 Alert API!")
+    
+    # Also try to get bot info to verify token is valid
+    bot_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
+    try:
+        bot_info = requests.get(bot_url).json()
+    except:
+        bot_info = {"error": "Could not fetch bot info"}
     
     return {
-        "telegram_test": "sent" if success else "failed",
-        "bot_token_prefix": TELEGRAM_BOT_TOKEN[:10] + "..." if TELEGRAM_BOT_TOKEN else None,
-        "chat_id": TELEGRAM_CHAT_ID
+        "message_sent": result,
+        "bot_info": bot_info,
+        "your_chat_id": TELEGRAM_CHAT_ID,
+        "help": "Make sure you have started a chat with your bot first"
+    }
+
+@app.post("/detect")
+async def detect(file: UploadFile = File(...)):
+    """ESP32-CAM sends image here"""
+    image_bytes = await file.read()
+    time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    caption = f"🚨 PERSON DETECTED!\nTime: {time_now}"
+    
+    result = send_telegram_photo(image_bytes, caption)
+    
+    return {
+        "status": "success",
+        "telegram_sent": result.get("success", False),
+        "telegram_response": result,
+        "time": time_now
     }
 
 @app.get("/status")
 def status():
-    """Check system status"""
     return {
         "api_status": "online",
         "telegram_ready": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
